@@ -1,18 +1,15 @@
 name: Build Omnirouter
 
 on:
-  workflow_dispatch:
   push:
     paths:
-      - "omnirouter-ai (1).zip"
-      - ".github/workflows/build-omnirouter.yml"
-
-permissions:
-  contents: read
+      - 'omnirouter-ai (1).zip'
+      - '.github/workflows/build-omnirouter.yml'
+  workflow_dispatch: {}
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -23,168 +20,85 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      - name: Unzip archive
-        shell: bash
-        run: |
-          set -e
-          rm -rf proj
-          mkdir -p proj
-          unzip -o "./omnirouter-ai (1).zip" -d proj
-          echo "=== Extracted files ==="
-          find proj -maxdepth 3 -type f | sort | head -200
-
-      - name: Detect Android project root
-        shell: bash
-        run: |
-          set -e
-          if [ -f "proj/settings.gradle.kts" ] || [ -f "proj/settings.gradle" ]; then
-            echo "PROJECT_ROOT=proj" >> "$GITHUB_ENV"
-          else
-            SETTINGS_FILE=$(find proj -type f \( \
-              -name "settings.gradle.kts" -o \
-              -name "settings.gradle" \
-            \) -print -quit)
-            
-            if [ -z "$SETTINGS_FILE" ]; then
-              echo "ERROR: settings.gradle(.kts) not found"
-              exit 1
-            fi
-            
-            ROOT_DIR=$(dirname "$SETTINGS_FILE")
-            echo "PROJECT_ROOT=$ROOT_DIR" >> "$GITHUB_ENV"
-          fi
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
-          cache: gradle
-          cache-dependency-path: "${{ env.PROJECT_ROOT }}/build.gradle*"
+          java-version: '17'
 
-      - name: Verify Android project
+      - name: Unzip archive
+        run: |
+          mkdir -p proj
+          unzip -o "./omnirouter-ai (1).zip" -d proj
+          echo "=== Extracted project ==="
+          ls -la proj
+
+      - name: Detect project type and build
         shell: bash
         run: |
           set -e
-          cd "$PROJECT_ROOT"
-          echo "Project root: $(pwd)"
-          test -f settings.gradle.kts || test -f settings.gradle
-          test -f build.gradle.kts || test -f build.gradle
-          echo "=== Project root ==="
-          ls -la
+          cd proj
+          BUILT=0
 
-      - name: Install Gradle 9.3.1
-        shell: bash
-        run: |
-          set -e
-          GRADLE_VERSION="9.3.1"
-          curl -fsSL \
-            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
-            -o /tmp/gradle.zip
-          sudo mkdir -p /opt/gradle
-          sudo unzip -q -o \
-            /tmp/gradle.zip \
-            -d /opt/gradle
-          echo "/opt/gradle/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
-          export PATH="/opt/gradle/gradle-${GRADLE_VERSION}/bin:$PATH"
-          gradle --version
+          if [ -f gradlew ] || [ -f build.gradle ] || [ -f build.gradle.kts ] || [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
+            echo "Detected Gradle/Android project"
+            if [ -f gradlew ]; then
+              chmod +x ./gradlew
+              ./gradlew assembleRelease || ./gradlew assembleDebug
+            else
+              echo "No Gradle wrapper found; using runner Gradle"
+              gradle assembleRelease || gradle assembleDebug
+            fi
+            BUILT=1
+          fi
 
-      - name: Configure Android SDK
-        shell: bash
-        run: |
-          set -e
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          if [ -f package.json ]; then
+            echo "Detected Node project"
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            if [ -f package-lock.json ]; then
+              npm ci --silent || npm install --silent
+            else
+              npm install --silent
+            fi
+            npm run build --if-present
+            BUILT=1
+          fi
 
-      - name: Generate debug keystore
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_ROOT"
-          mkdir -p .
-          keytool \
-            -genkeypair \
-            -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -keypass android \
-            -alias androiddebugkey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-          ls -lh debug.keystore
+          if [ -f setup.py ] || [ -f requirements.txt ]; then
+            echo "Detected Python project"
+            sudo apt-get install -y python3 python3-pip
+            python3 -m pip install --upgrade pip setuptools wheel
+            if [ -f requirements.txt ]; then
+              pip3 install -r requirements.txt
+            fi
+            BUILT=1
+          fi
 
-      - name: Build debug APK
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_ROOT"
-          export GRADLE_OPTS="-Dorg.gradle.daemon=false -Djava.awt.headless=true"
-          export JAVA_TOOL_OPTIONS="-Djava.awt.headless=true"
-          echo "=== Gradle version ==="
-          gradle --version
-          echo "=== Building debug APK ==="
-          gradle \
-            --no-daemon \
-            --stacktrace \
-            --info \
-            assembleDebug
-
-      - name: Locate APK
-        shell: bash
-        run: |
-          set -e
-          echo "=== Searching for APK ==="
-          find "$PROJECT_ROOT" \
-            -type f \
-            -iname "*.apk" \
-            -print
-          APK=$(find "$PROJECT_ROOT" \
-            -type f \
-            -path "*/build/outputs/apk/*.apk" \
-            -print \
-            -quit)
-          if [ -z "$APK" ]; then
-            echo "ERROR: No APK was produced."
+          if [ $BUILT -eq 0 ]; then
+            echo "No known build system detected"
+            ls -la
             exit 1
           fi
-          echo "APK=$APK" >> "$GITHUB_ENV"
-          echo "Found APK:"
-          ls -lh "$APK"
 
-      - name: Verify APK
+      - name: Collect build artifacts
         shell: bash
         run: |
-          set -e
-          test -f "$APK"
-          test -s "$APK"
-          echo "APK size:"
-          du -h "$APK"
-          echo "APK SHA-256:"
-          sha256sum "$APK"
+          cd proj
+          mkdir -p build_artifacts
+          find . -type f \( -iname '*.apk' -o -iname '*.aab' \) -print0 | xargs -0 -r -I{} bash -c 'cp --parents "$1" build_artifacts' -- {}
+          if [ -d dist ]; then cp -r dist build_artifacts/; fi
+          if [ -d build ] && [ ! -d app/build ]; then cp -r build build_artifacts/; fi
+          echo "=== APK/AAB files ==="
+          find build_artifacts -type f -print
+          if ! find build_artifacts -type f \( -iname '*.apk' -o -iname '*.aab' \) -print -quit | grep -q .; then
+            echo "No APK/AAB was produced"
+            exit 1
+          fi
 
-      - name: Prepare artifact
-        shell: bash
-        run: |
-          set -e
-          rm -rf apk_artifact
-          mkdir -p apk_artifact
-          cp "$APK" "apk_artifact/Omnirouter-AI-3.0-debug.apk"
-          sha256sum \
-            "apk_artifact/Omnirouter-AI-3.0-debug.apk" \
-            > "apk_artifact/SHA256SUM.txt"
-          ls -lh apk_artifact
-
-      - name: Upload APK artifact
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Omnirouter-AI-3.0-debug-APK
-          path: apk_artifact/
+          name: omnirouter-build
+          path: proj/build_artifacts
           if-no-files-found: error
-          retention-days: 30
