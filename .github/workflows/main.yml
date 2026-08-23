@@ -1,0 +1,104 @@
+name: Build Omnirouter
+
+on:
+  push:
+    paths:
+      - 'omnirouter-ai (1).zip'
+      - '.github/workflows/build-omnirouter.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Unzip archive
+        run: |
+          mkdir -p proj
+          unzip -o "./omnirouter-ai (1).zip" -d proj
+          echo "=== Extracted project ==="
+          ls -la proj
+
+      - name: Detect project type and build
+        shell: bash
+        run: |
+          set -e
+          cd proj
+          BUILT=0
+
+          if [ -f gradlew ] || [ -f build.gradle ] || [ -f build.gradle.kts ] || [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
+            echo "Detected Gradle/Android project"
+            if [ -f gradlew ]; then
+              chmod +x ./gradlew
+              ./gradlew assembleRelease || ./gradlew assembleDebug
+            else
+              echo "No Gradle wrapper found; using runner Gradle"
+              gradle assembleRelease || gradle assembleDebug
+            fi
+            BUILT=1
+          fi
+
+          if [ -f package.json ]; then
+            echo "Detected Node project"
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            if [ -f package-lock.json ]; then
+              npm ci --silent || npm install --silent
+            else
+              npm install --silent
+            fi
+            npm run build --if-present
+            BUILT=1
+          fi
+
+          if [ -f setup.py ] || [ -f requirements.txt ]; then
+            echo "Detected Python project"
+            sudo apt-get install -y python3 python3-pip
+            python3 -m pip install --upgrade pip setuptools wheel
+            if [ -f requirements.txt ]; then
+              pip3 install -r requirements.txt
+            fi
+            BUILT=1
+          fi
+
+          if [ $BUILT -eq 0 ]; then
+            echo "No known build system detected"
+            ls -la
+            exit 1
+          fi
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          cd proj
+          mkdir -p build_artifacts
+          find . -type f \( -iname '*.apk' -o -iname '*.aab' \) -print0 | xargs -0 -r -I{} bash -c 'cp --parents "$1" build_artifacts' -- {}
+          if [ -d dist ]; then cp -r dist build_artifacts/; fi
+          if [ -d build ] && [ ! -d app/build ]; then cp -r build build_artifacts/; fi
+          echo "=== APK/AAB files ==="
+          find build_artifacts -type f -print
+          if ! find build_artifacts -type f \( -iname '*.apk' -o -iname '*.aab' \) -print -quit | grep -q .; then
+            echo "No APK/AAB was produced"
+            exit 1
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnirouter-build
+          path: proj/build_artifacts
+          if-no-files-found: error
