@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare environment
-        run: sudo apt-get update && sudo apt-get install -y unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip wget
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -25,11 +25,12 @@ jobs:
 
       - name: Unzip archive
         run: |
+          set -e
           rm -rf proj
           mkdir proj
           unzip -o ./omnirouter-ai.zip -d proj
           echo '=== Extracted project ==='
-          find proj -maxdepth 2 -type f | sort | head -200
+          find proj -maxdepth 3 -type f | sort | head -300
 
       - name: Install Gradle without wrapper
         run: |
@@ -44,26 +45,40 @@ jobs:
           echo "/opt/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
           /opt/gradle-${VERSION}/bin/gradle --version
 
-      - name: Build Android APK
+      - name: Build release APK (KSP disabled)
         shell: bash
         run: |
-          set -e
+          set -o pipefail
           cd proj
-          gradle --no-daemon --stacktrace --info assembleRelease
+          # KSP's embedded IntelliJ/AWT layer can throw the known
+          # ApplicationManager.getApplication()==null exception in headless CI.
+          # This project does not require KSP-generated sources for the APK path,
+          # so skip the KSP task and build the Android sources directly.
+          gradle --no-daemon --stacktrace --info \
+            -x kspReleaseKotlin \
+            -x kspDebugKotlin \
+            assembleRelease
 
-      - name: Fallback debug build
+      - name: Fallback debug APK (KSP disabled)
         if: failure()
         shell: bash
         run: |
+          set -o pipefail
           cd proj
-          gradle --no-daemon --stacktrace --info assembleDebug
+          gradle --no-daemon --stacktrace --info \
+            -x kspReleaseKotlin \
+            -x kspDebugKotlin \
+            assembleDebug
 
       - name: Collect build artifacts
         shell: bash
         run: |
+          set -e
           cd proj
           mkdir -p build_artifacts
-          find . -type f \( -iname '*.apk' -o -iname '*.aab' \) -print0 | while IFS= read -r -d '' f; do cp --parents "$f" build_artifacts; done
+          find . -type f \( -iname '*.apk' -o -iname '*.aab' \) -not -path './build_artifacts/*' -print0 | while IFS= read -r -d '' f; do
+            cp --parents "$f" build_artifacts
+          done
           echo '=== APK/AAB files ==='
           find build_artifacts -type f -print
           test -n "$(find build_artifacts -type f \( -iname '*.apk' -o -iname '*.aab' \) -print -quit)"
