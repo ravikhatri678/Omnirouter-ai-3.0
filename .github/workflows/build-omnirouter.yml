@@ -24,10 +24,11 @@ jobs:
           java-version: '17'
 
       - name: Unzip archive
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           rm -rf proj
-          mkdir proj
+          mkdir -p proj
           unzip -o ./omnirouter-ai.zip -d proj
           echo '=== Extracted project ==='
           find proj -maxdepth 3 -type f | sort | head -300
@@ -35,23 +36,48 @@ jobs:
       - name: Disable KSP in project files
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd proj
-          # Remove KSP plugin application from all Gradle Kotlin build files.
-          # Merely using -x ksp... is not sufficient because the KSP plugin can
-          # initialize its embedded IntelliJ/AWT runtime during configuration.
-          while IFS= read -r -d '' f; do
-            sed -i \
-              -e '/^[[:space:]]*alias(libs\.plugins\.google\.devtools\.ksp)/s/^/\/\/ KSP disabled in CI: /' \
-              -e '/^[[:space:]]*id(["'"']com\.google\.devtools\.ksp["'"'])/s/^/\/\/ KSP disabled in CI: /' \
-              "$f"
-          done < <(find . -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' \) -print0)
-          echo '=== Remaining KSP references ==='
-          grep -RniE 'google\.devtools\.ksp|kspKotlin|kspRelease|kspDebug' --include='*.gradle' --include='*.gradle.kts' . || true
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gradle_files = list(Path('.').rglob('build.gradle')) + list(Path('.').rglob('build.gradle.kts'))
+          changed = []
+          for path in gradle_files:
+              text = path.read_text(encoding='utf-8')
+              lines = text.splitlines(True)
+              out = []
+              touched = False
+              for line in lines:
+                  low = line.lower()
+                  # Disable KSP plugin application and KSP dependency/configuration
+                  # without shell/regex quoting tricks that can break the CI script.
+                  if 'google.devtools.ksp' in low or 'ksp(' in low or 'ksp ' in low or 'ksp.' in low:
+                      if not line.lstrip().startswith('//') and not line.lstrip().startswith('/*'):
+                          indent = line[:len(line) - len(line.lstrip())]
+                          newline = '\n' if line.endswith('\n') else ''
+                          out.append(f'{indent}// KSP disabled in CI: {line.strip()}{newline}')
+                          touched = True
+                          continue
+                  out.append(line)
+              if touched:
+                  path.write_text(''.join(out), encoding='utf-8')
+                  changed.append(str(path))
+
+          print('KSP-disabled files:')
+          for p in changed:
+              print(' -', p)
+          print('Remaining KSP references:')
+          for path in gradle_files:
+              for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+                  if 'ksp' in line.lower():
+                      print(f'{path}:{n}:{line}')
+          PY
 
       - name: Install Gradle without wrapper
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd proj
           rm -f gradle/wrapper/gradle-wrapper.jar
           VERSION=$(sed -n 's/^distributionUrl=.*gradle-\([0-9][0-9.]*\)-bin\.zip.*$/\1/p' gradle/wrapper/gradle-wrapper.properties | head -1)
@@ -60,9 +86,10 @@ jobs:
           wget -q "https://services.gradle.org/distributions/gradle-${VERSION}-bin.zip" -O /tmp/gradle.zip
           sudo unzip -q /tmp/gradle.zip -d /opt
           echo "/opt/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
-          /opt/gradle-${VERSION}/bin/gradle --version
+          "/opt/gradle-${VERSION}/bin/gradle" --version
 
       - name: Build release APK (KSP disabled)
+        id: release
         shell: bash
         run: |
           set -o pipefail
@@ -70,7 +97,7 @@ jobs:
           gradle --no-daemon --stacktrace --info -x kspReleaseKotlin -x kspDebugKotlin assembleRelease
 
       - name: Fallback debug APK (KSP disabled)
-        if: failure()
+        if: failure() && steps.release.outcome == 'failure'
         shell: bash
         run: |
           set -o pipefail
@@ -80,7 +107,7 @@ jobs:
       - name: Collect build artifacts
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd proj
           mkdir -p build_artifacts
           find . -type f \( -iname '*.apk' -o -iname '*.aab' \) -not -path './build_artifacts/*' -print0 | while IFS= read -r -d '' f; do
