@@ -50,9 +50,10 @@ jobs:
               touched = False
               for line in lines:
                   low = line.lower()
-                  # Disable KSP plugin application and KSP dependency/configuration
-                  # without shell/regex quoting tricks that can break the CI script.
-                  if 'google.devtools.ksp' in low or 'ksp(' in low or 'ksp ' in low or 'ksp.' in low:
+                  # KSP is disabled for this CI build. Remove both plugin
+                  # application and dependency entries so no missing `ksp`
+                  # configuration remains after the plugin is disabled.
+                  if 'ksp' in low:
                       if not line.lstrip().startswith('//') and not line.lstrip().startswith('/*'):
                           indent = line[:len(line) - len(line.lstrip())]
                           newline = '\n' if line.endswith('\n') else ''
@@ -67,10 +68,11 @@ jobs:
           print('KSP-disabled files:')
           for p in changed:
               print(' -', p)
-          print('Remaining KSP references:')
+          print('Remaining active KSP references:')
           for path in gradle_files:
               for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
-                  if 'ksp' in line.lower():
+                  stripped = line.lstrip()
+                  if 'ksp' in line.lower() and not stripped.startswith('//') and not stripped.startswith('/*'):
                       print(f'{path}:{n}:{line}')
           PY
 
