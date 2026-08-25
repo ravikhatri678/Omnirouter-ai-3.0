@@ -40,7 +40,6 @@ jobs:
           cd proj
           python3 - <<'PY'
           from pathlib import Path
-
           files = list(Path('.').rglob('build.gradle')) + list(Path('.').rglob('build.gradle.kts'))
           changed = []
           for path in files:
@@ -60,7 +59,6 @@ jobs:
               if touched:
                   path.write_text(''.join(out), encoding='utf-8')
                   changed.append(str(path))
-
           print('Modified:', *changed, sep='\n  ')
           PY
 
@@ -78,14 +76,14 @@ jobs:
           echo "/opt/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
           "/opt/gradle-${VERSION}/bin/gradle" --version
 
-      - name: Build release APK
+      - name: Build release APK (KSP disabled)
         shell: bash
         run: |
           set -o pipefail
           cd proj
           gradle --no-daemon --stacktrace --info assembleRelease
 
-      - name: Fallback debug APK
+      - name: Fallback debug APK (KSP disabled)
         if: failure()
         shell: bash
         run: |
