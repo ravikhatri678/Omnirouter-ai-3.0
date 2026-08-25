@@ -53,7 +53,7 @@ jobs:
                   if not stripped.startswith('//') and not stripped.startswith('/*') and 'ksp' in low:
                       indent = line[:len(line) - len(stripped)]
                       newline = '\n' if line.endswith('\n') else ''
-                      out.append(f'{indent}// CI: KSP disabled: {stripped.rstrip()}'+newline)
+                      out.append(f'{indent}// CI: KSP disabled: {stripped.rstrip()}{newline}')
                       touched = True
                   else:
                       out.append(line)
@@ -83,7 +83,7 @@ jobs:
         run: |
           set -o pipefail
           cd proj
-          gradle --no-daemon --stacktrace --info -x kspReleaseKotlin -x kspDebugKotlin assembleRelease
+          gradle --no-daemon --stacktrace --info assembleRelease
 
       - name: Fallback debug APK
         if: failure()
@@ -91,7 +91,7 @@ jobs:
         run: |
           set -o pipefail
           cd proj
-          gradle --no-daemon --stacktrace --info -x kspReleaseKotlin -x kspDebugKotlin assembleDebug
+          gradle --no-daemon --stacktrace --info assembleDebug
 
       - name: Collect APK
         shell: bash
@@ -100,7 +100,7 @@ jobs:
           rm -rf artifacts
           mkdir -p artifacts
           find proj -type f -name '*.apk' -not -path '*/build_artifacts/*' -exec cp {} artifacts/ \;
-          find artifacts -type f -maxdepth 1 -print
+          find artifacts -maxdepth 1 -type f -print
           test -n "$(find artifacts -maxdepth 1 -type f -name '*.apk' -print -quit)"
 
       - name: Upload APK
