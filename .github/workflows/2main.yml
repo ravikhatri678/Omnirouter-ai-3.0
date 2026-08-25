@@ -3,7 +3,7 @@ name: Build Omnirouter
 on:
   push:
     paths:
-      - 'omnirouter-ai (1).zip'
+      - 'omnirouter-ai.zip'
       - '.github/workflows/build-omnirouter.yml'
   workflow_dispatch: {}
 
@@ -29,7 +29,7 @@ jobs:
       - name: Unzip archive
         run: |
           mkdir -p proj
-          unzip -o "./omnirouter-ai (1).zip" -d proj
+          unzip -o "./omnirouter-ai.zip" -d proj
           echo "=== Extracted project ==="
           ls -la proj
 
