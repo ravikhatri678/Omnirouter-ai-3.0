@@ -1,4 +1,4 @@
-name: Build Omnirouter APK (Fixed)
+name: Build Omnirouter APK
 
 on:
   workflow_dispatch: {}
@@ -15,45 +15,93 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
+      - name: Install unzip and wget
+        run: sudo apt-get update && sudo apt-get install -y unzip wget
 
       - name: Extract project
-        run: |
-          rm -rf proj
-          mkdir proj
-          unzip -o ./omnirouter-ai.zip -d proj
-          echo '=== extracted ==='
-          find proj -maxdepth 2 -type f | head -100
-
-      - name: Build Android APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          rm -rf proj
+          mkdir -p proj
+          unzip -o ./omnirouter-ai.zip -d proj
+          test -f proj/settings.gradle.kts
+          test -f proj/app/build.gradle.kts
+
+      - name: Disable KSP in extracted project
+        shell: bash
+        run: |
+          set -euo pipefail
           cd proj
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            sed -i '/^distributionUrl=/d' gradle/wrapper/gradle-wrapper.properties 2>/dev/null || true
-            gradle --version
-            gradle assembleRelease --no-daemon --stacktrace || gradle assembleDebug --no-daemon --stacktrace
-          else
-            gradle assembleRelease --no-daemon --stacktrace || gradle assembleDebug --no-daemon --stacktrace
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          files = list(Path('.').rglob('build.gradle')) + list(Path('.').rglob('build.gradle.kts'))
+          changed = []
+          for path in files:
+              lines = path.read_text(encoding='utf-8').splitlines(True)
+              out = []
+              touched = False
+              for line in lines:
+                  stripped = line.lstrip()
+                  low = line.lower()
+                  if not stripped.startswith('//') and not stripped.startswith('/*') and 'ksp' in low:
+                      indent = line[:len(line) - len(stripped)]
+                      newline = '\n' if line.endswith('\n') else ''
+                      out.append(f'{indent}// CI: KSP disabled: {stripped.rstrip()}'+newline)
+                      touched = True
+                  else:
+                      out.append(line)
+              if touched:
+                  path.write_text(''.join(out), encoding='utf-8')
+                  changed.append(str(path))
+
+          print('Modified:', *changed, sep='\n  ')
+          PY
+
+      - name: Install standalone Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd proj
+          rm -f gradle/wrapper/gradle-wrapper.jar
+          VERSION=$(sed -n 's/^distributionUrl=.*gradle-\([0-9][0-9.]*\)-bin\.zip.*$/\1/p' gradle/wrapper/gradle-wrapper.properties | head -1)
+          [ -n "$VERSION" ] || VERSION=8.13
+          echo "Using Gradle $VERSION"
+          wget -q "https://services.gradle.org/distributions/gradle-${VERSION}-bin.zip" -O /tmp/gradle.zip
+          sudo unzip -q /tmp/gradle.zip -d /opt
+          echo "/opt/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
+          "/opt/gradle-${VERSION}/bin/gradle" --version
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -o pipefail
+          cd proj
+          gradle --no-daemon --stacktrace --info -x kspReleaseKotlin -x kspDebugKotlin assembleRelease
+
+      - name: Fallback debug APK
+        if: failure()
+        shell: bash
+        run: |
+          set -o pipefail
+          cd proj
+          gradle --no-daemon --stacktrace --info -x kspReleaseKotlin -x kspDebugKotlin assembleDebug
 
       - name: Collect APK
+        shell: bash
         run: |
+          set -euo pipefail
+          rm -rf artifacts
           mkdir -p artifacts
-          find proj -type f -name '*.apk' -exec cp {} artifacts/ \;
-          ls -lh artifacts
-          test -n "$(find artifacts -type f -name '*.apk' -print -quit)"
+          find proj -type f -name '*.apk' -not -path '*/build_artifacts/*' -exec cp {} artifacts/ \;
+          find artifacts -type f -maxdepth 1 -print
+          test -n "$(find artifacts -maxdepth 1 -type f -name '*.apk' -print -quit)"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
