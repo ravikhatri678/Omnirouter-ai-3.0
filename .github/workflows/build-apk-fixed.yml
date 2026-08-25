@@ -3,9 +3,6 @@ name: Build Omnirouter APK
 on:
   workflow_dispatch: {}
   push:
-    paths:
-      - 'omnirouter-ai.zip'
-      - '.github/workflows/build-apk-fixed.yml'
 
 jobs:
   build:
