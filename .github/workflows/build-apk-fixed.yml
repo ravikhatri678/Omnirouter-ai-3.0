@@ -107,3 +107,5 @@ jobs:
           name: omnirouter-apk
           path: artifacts/*.apk
           if-no-files-found: error
+
+# CI trigger refresh: use current KSP-disabled release workflow.
