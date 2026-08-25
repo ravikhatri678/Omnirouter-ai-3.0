@@ -29,7 +29,27 @@ jobs:
           unzip -o ./omnirouter-ai.zip -d proj
           test -f proj/settings.gradle.kts
           test -f proj/app/build.gradle.kts
-      - name: Disable KSP in extracted project
+      - name: Install standalone Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd proj
+          rm -f gradle/wrapper/gradle-wrapper.jar
+          VERSION=$(sed -n 's/^distributionUrl=.*gradle-\([0-9][0-9.]*\)-bin\.zip.*$/\1/p' gradle/wrapper/gradle-wrapper.properties | head -1)
+          [ -n "$VERSION" ] || VERSION=8.13
+          echo "Using Gradle $VERSION"
+          wget -q "https://services.gradle.org/distributions/gradle-${VERSION}-bin.zip" -O /tmp/gradle.zip
+          sudo unzip -q /tmp/gradle.zip -d /opt
+          echo "/opt/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
+          "/opt/gradle-${VERSION}/bin/gradle" --version
+      - name: Build release APK with original project configuration
+        shell: bash
+        run: |
+          set -o pipefail
+          cd proj
+          gradle --no-daemon --stacktrace --info assembleRelease
+      - name: Fallback - disable KSP and build debug APK
+        if: failure()
         shell: bash
         run: |
           set -euo pipefail
@@ -43,35 +63,12 @@ jobs:
                   stripped=line.lstrip()
                   if not stripped.startswith('//') and not stripped.startswith('/*') and 'ksp' in line.lower():
                       indent=line[:len(line)-len(stripped)]
-                      out.append(indent+'// CI: KSP disabled: '+stripped.rstrip()+'\n')
+                      newline='\n' if line.endswith('\n') else ''
+                      out.append(indent+'// CI: KSP disabled: '+stripped.rstrip()+newline)
                   else:
                       out.append(line)
               path.write_text(''.join(out), encoding='utf-8')
           PY
-      - name: Install standalone Gradle
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd proj
-          rm -f gradle/wrapper/gradle-wrapper.jar
-          VERSION=$(sed -n 's/^distributionUrl=.*gradle-\([0-9][0-9.]*\)-bin\.zip.*$/\1/p' gradle/wrapper/gradle-wrapper.properties | head -1)
-          [ -n "$VERSION" ] || VERSION=9.3.1
-          wget -q "https://services.gradle.org/distributions/gradle-${VERSION}-bin.zip" -O /tmp/gradle.zip
-          sudo unzip -q /tmp/gradle.zip -d /opt
-          echo "/opt/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
-          "/opt/gradle-${VERSION}/bin/gradle" --version
-      - name: Build release APK (KSP disabled)
-        shell: bash
-        run: |
-          set -o pipefail
-          cd proj
-          gradle --no-daemon --stacktrace --info assembleRelease
-      - name: Fallback debug APK (KSP disabled)
-        if: failure()
-        shell: bash
-        run: |
-          set -o pipefail
-          cd proj
           gradle --no-daemon --stacktrace --info assembleDebug
       - name: Collect APK
         shell: bash
@@ -80,6 +77,7 @@ jobs:
           rm -rf artifacts
           mkdir -p artifacts
           find proj -type f -name '*.apk' -not -path '*/build_artifacts/*' -exec cp {} artifacts/ \;
+          find artifacts -maxdepth 1 -type f -print
           test -n "$(find artifacts -maxdepth 1 -type f -name '*.apk' -print -quit)"
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -87,5 +85,3 @@ jobs:
           name: omnirouter-apk
           path: artifacts/*.apk
           if-no-files-found: error
-
-# Fresh CI trigger after removing stale KSP task exclusions.
