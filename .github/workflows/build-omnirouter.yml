@@ -32,6 +32,23 @@ jobs:
           echo '=== Extracted project ==='
           find proj -maxdepth 3 -type f | sort | head -300
 
+      - name: Disable KSP in project files
+        shell: bash
+        run: |
+          set -e
+          cd proj
+          # Remove KSP plugin application from all Gradle Kotlin build files.
+          # Merely using -x ksp... is not sufficient because the KSP plugin can
+          # initialize its embedded IntelliJ/AWT runtime during configuration.
+          while IFS= read -r -d '' f; do
+            sed -i \
+              -e '/^[[:space:]]*alias(libs\.plugins\.google\.devtools\.ksp)/s/^/\/\/ KSP disabled in CI: /' \
+              -e '/^[[:space:]]*id(["'"']com\.google\.devtools\.ksp["'"'])/s/^/\/\/ KSP disabled in CI: /' \
+              "$f"
+          done < <(find . -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' \) -print0)
+          echo '=== Remaining KSP references ==='
+          grep -RniE 'google\.devtools\.ksp|kspKotlin|kspRelease|kspDebug' --include='*.gradle' --include='*.gradle.kts' . || true
+
       - name: Install Gradle without wrapper
         run: |
           set -e
@@ -50,14 +67,7 @@ jobs:
         run: |
           set -o pipefail
           cd proj
-          # KSP's embedded IntelliJ/AWT layer can throw the known
-          # ApplicationManager.getApplication()==null exception in headless CI.
-          # This project does not require KSP-generated sources for the APK path,
-          # so skip the KSP task and build the Android sources directly.
-          gradle --no-daemon --stacktrace --info \
-            -x kspReleaseKotlin \
-            -x kspDebugKotlin \
-            assembleRelease
+          gradle --no-daemon --stacktrace --info -x kspReleaseKotlin -x kspDebugKotlin assembleRelease
 
       - name: Fallback debug APK (KSP disabled)
         if: failure()
@@ -65,10 +75,7 @@ jobs:
         run: |
           set -o pipefail
           cd proj
-          gradle --no-daemon --stacktrace --info \
-            -x kspReleaseKotlin \
-            -x kspDebugKotlin \
-            assembleDebug
+          gradle --no-daemon --stacktrace --info -x kspReleaseKotlin -x kspDebugKotlin assembleDebug
 
       - name: Collect build artifacts
         shell: bash
