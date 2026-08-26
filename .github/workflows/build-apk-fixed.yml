@@ -10,13 +10,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Install unzip and wget
         run: sudo apt-get update && sudo apt-get install -y unzip wget
+
       - name: Extract project
         shell: bash
         run: |
@@ -26,6 +29,28 @@ jobs:
           unzip -o ./omnirouter-ai.zip -d proj
           test -f proj/settings.gradle.kts
           test -f proj/app/build.gradle.kts
+
+      - name: Fix KSP CI crash
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd proj
+          python3 - <<'PY'
+          from pathlib import Path
+
+          changed = []
+          for path in list(Path('.').rglob('*.gradle')) + list(Path('.').rglob('*.gradle.kts')) + list(Path('.').rglob('*.toml')):
+              try:
+                  text = path.read_text(encoding='utf-8')
+              except (UnicodeDecodeError, OSError):
+                  continue
+              if '2.3.5' in text:
+                  new = text.replace('2.3.5', '2.3.6')
+                  path.write_text(new, encoding='utf-8')
+                  changed.append(str(path))
+          print('Updated KSP 2.3.5 -> 2.3.6 in:', changed)
+          PY
+
       - name: Install standalone Gradle
         shell: bash
         run: |
@@ -39,34 +64,14 @@ jobs:
           sudo unzip -q /tmp/gradle.zip -d /opt
           echo "/opt/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
           "/opt/gradle-${VERSION}/bin/gradle" --version
-      - name: Build release APK with original project configuration
+
+      - name: Build release APK
         shell: bash
         run: |
           set -o pipefail
           cd proj
           gradle --no-daemon --stacktrace --info assembleRelease
-      - name: Fallback - disable KSP and build debug APK
-        if: failure()
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd proj
-          python3 - <<'PY'
-          from pathlib import Path
-          for path in list(Path('.').rglob('build.gradle')) + list(Path('.').rglob('build.gradle.kts')):
-              lines = path.read_text(encoding='utf-8').splitlines(True)
-              out=[]
-              for line in lines:
-                  stripped=line.lstrip()
-                  if not stripped.startswith('//') and not stripped.startswith('/*') and 'ksp' in line.lower():
-                      indent=line[:len(line)-len(stripped)]
-                      newline='\n' if line.endswith('\n') else ''
-                      out.append(indent+'// CI: KSP disabled: '+stripped.rstrip()+newline)
-                  else:
-                      out.append(line)
-              path.write_text(''.join(out), encoding='utf-8')
-          PY
-          gradle --no-daemon --stacktrace --info assembleDebug
+
       - name: Collect APK
         shell: bash
         run: |
@@ -76,6 +81,7 @@ jobs:
           find proj -type f -name '*.apk' -not -path '*/build_artifacts/*' -exec cp {} artifacts/ \;
           find artifacts -maxdepth 1 -type f -print
           test -n "$(find artifacts -maxdepth 1 -type f -name '*.apk' -print -quit)"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
