@@ -30,25 +30,53 @@ jobs:
           test -f proj/settings.gradle.kts
           test -f proj/app/build.gradle.kts
 
-      - name: Fix KSP CI crash
+      - name: Fix KSP CI crash and release signing
         shell: bash
         run: |
           set -euo pipefail
           cd proj
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
+          files = list(Path('.').rglob('*.gradle')) + list(Path('.').rglob('*.gradle.kts')) + list(Path('.').rglob('*.toml'))
           changed = []
-          for path in list(Path('.').rglob('*.gradle')) + list(Path('.').rglob('*.gradle.kts')) + list(Path('.').rglob('*.toml')):
+          for path in files:
               try:
                   text = path.read_text(encoding='utf-8')
               except (UnicodeDecodeError, OSError):
                   continue
-              if '2.3.5' in text:
-                  new = text.replace('2.3.5', '2.3.6')
+              new = text.replace('2.3.5', '2.3.6')
+              if new != text:
                   path.write_text(new, encoding='utf-8')
-                  changed.append(str(path))
-          print('Updated KSP 2.3.5 -> 2.3.6 in:', changed)
+                  changed.append(str(path) + ' (KSP)')
+
+          # CI cannot access the developer's private upload keystore. Use the
+          # Android debug signing key for the release artifact so the APK is
+          # installable. The private production/upload key is never committed.
+          app = Path('app/build.gradle.kts')
+          text = app.read_text(encoding='utf-8')
+          new = re.sub(
+              r'(?m)^(\s*)signingConfig\s*=\s*signingConfigs\.(?:getByName\(["\']release["\']\)|release)\s*$',
+              r'\1signingConfig = signingConfigs.getByName("debug")',
+              text,
+          )
+          new = re.sub(
+              r'(?m)^(\s*)signingConfig\s*=\s*signingConfigs\["release"\]\s*$',
+              r'\1signingConfig = signingConfigs.getByName("debug")',
+              new,
+          )
+          if new != text:
+              app.write_text(new, encoding='utf-8')
+              changed.append('app/build.gradle.kts (release signing -> debug signing)')
+          else:
+              print('WARNING: no release signingConfig assignment matched; checking for custom JKS references')
+              if 'my-upload-key.jks' in text:
+                  new = text.replace('signingConfig = signingConfigs.getByName("release")', 'signingConfig = signingConfigs.getByName("debug")')
+                  app.write_text(new, encoding='utf-8')
+                  changed.append('app/build.gradle.kts (fallback release signing -> debug signing)')
+
+          print('Build fixes:', changed)
           PY
 
       - name: Install standalone Gradle
